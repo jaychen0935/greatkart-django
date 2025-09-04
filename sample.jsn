@@ -1,0 +1,14 @@
+[
+{
+"name": "Oven1",
+"start": 1696113600000,
+"type": "fixed",
+"m": 2,
+"max": 1000,
+"nominalTimes": [0, 48, 198, 330, 500, 750, 1000],
+"currentIndex": 0,
+"pauses": [],
+"accumulatedPause": 0
+},
+...
+]

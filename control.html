@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>可靠度 Oven 時程控制系統 (Demo)</title>
+<style>
+  body {font-family: Arial, Helvetica, sans-serif; padding: 12px; background:#f7f8fb;}
+  .header {display:flex;gap:12px;align-items:center;margin-bottom:12px;}
+  .ovens {display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
+  .oven {background:white;padding:10px;border-radius:8px;box-shadow:0 1px 4px rgba(0,0,0,.08);}
+  .oven h4 {margin:0 0 8px 0;}
+  button{padding:6px 10px;border-radius:6px;border:1px solid #ccc;background:#fff;cursor:pointer;}
+  .controls{display:flex;gap:8px;flex-wrap:wrap;}
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;}
+  .modal-inner{background:#fff;padding:16px;border-radius:8px;width:95%;max-width:1000px;max-height:90%;overflow:auto;}
+  table{width:100%;border-collapse:collapse}
+  th,td{padding:6px;border-bottom:1px solid #eee;text-align:left}
+  .due{color:#b20;}
+  .small{font-size:0.9em;color:#555;}
+  input[type="number"]{width:80px}
+</style>
+</head>
+<body>
+  <div class="header">
+    <h2>可靠度 Oven 時程控制系統 (Demo)</h2>
+    <div style="margin-left:auto" class="controls">
+      <button id="toggleAllBtn">Pause All</button>
+      <button id="saveBtn">Save Now</button>
+      <span class="small" id="tickInfo">Tick: 1s</span>
+    </div>
+  </div>
+
+  <div class="ovens" id="ovensContainer"></div>
+
+  <!-- Modal -->
+  <div id="modal" style="display:none" class="modal">
+    <div class="modal-inner">
+      <button id="closeModal" style="float:right">Close</button>
+      <h3 id="modalTitle">Oven #</h3>
+      <div style="margin-bottom:8px">
+        <button id="ovenToggleRun">Stop Oven</button>
+        <span class="small">（若 oven 停止則 oven 內元件不累計）</span>
+      </div>
+
+      <div style="margin-bottom:8px">
+        <label>新增元件 ID: <input id="newCompId" placeholder="例如 C001"></label>
+        <label>初始累積小時: <input id="newCompHours" type="number" min="0" value="0"></label>
+        <label>mTTF?<input id="newIsMttf" type="checkbox"></label>
+        <label id="mttfSelectLabel" style="display:inline-block">mTTF 時間:
+          <select id="mttfSelect">
+            <option value="16">16H</option>
+            <option value="7">7H</option>
+            <option value="48">48H</option>
+          </select>
+        </label>
+        <button id="addCompBtn">Add Component</button>
+      </div>
+
+      <table>
+        <thead><tr><th>ID</th><th>累積時間 (H)</th><th>Next Checkpoint (H)</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody id="compTableBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+<script>
+/*
+  Reliable Oven Scheduler - single-file demo
+  - 32 ovens
+  - up to 45 components per oven
+  - default checkpoints: [0,168,330,500,750,1000]
+  - mTTF checkpoints custom: e.g. [16], [7], [48] (or could be repeated)
+*/
+
+const DEFAULT_CHECKPOINTS = [0,168,330,500,750,1000];
+const MAX_OVENS = 32;
+const MAX_COMPS = 45;
+const TICK_MS = 1000; // 1 second tick - converts to 1/3600 hours ≈ 0.000277777...
+const MS_TO_HOURS = 1/3600000; // 1 ms = 1/3600000 hours
+
+let globalPaused = false; // 全域暫停（第7點）
+let ovens = []; // array of ovens
+let modalState = { open:false, ovenIndex:null };
+
+function initData(){
+  const saved = localStorage.getItem('oven_scheduler_v1');
+  if(saved){
+    try {
+      ovens = JSON.parse(saved);
+      console.log('Loaded saved state');
+      return;
+    } catch(e){
+      console.warn('Load failed, init fresh');
+    }
+  }
+  // initialize ovens
+  ovens = [];
+  for(let i=0;i<MAX_OVENS;i++){
+    ovens.push({
+      id: i+1,
+      running: true, // oven 是否允許內部元件累計
+      components: [] // each component: {id,accHours, inMeasurement, isMttf, mttfHours, checkpoints:Array, nextIdx}
+    });
+  }
+}
+
+function saveData(){ localStorage.setItem('oven_scheduler_v1', JSON.stringify(ovens)); }
+
+function renderOvens(){
+  const cont = document.getElementById('ovensContainer');
+  cont.innerHTML = '';
+  ovens.forEach((o, idx)=>{
+    const el = document.createElement('div');
+    el.className = 'oven';
+    el.innerHTML = `
+      <h4>Oven ${o.id}</h4>
+      <div class="small">Components: ${o.components.length}/${MAX_COMPS}</div>
+      <div class="small">Status: <strong>${o.running ? 'Running' : 'Stopped'}</strong></div>
+      <div style="margin-top:8px" class="controls">
+        <button data-idx="${idx}" class="openBtn">Open</button>
+        <button data-idx="${idx}" class="toggleOven">${o.running?'Stop Oven':'Start Oven'}</button>
+        <button data-idx="${idx}" class="addDemo">Add Demo</button>
+      </div>
+    `;
+    cont.appendChild(el);
+  });
+
+  // attach events
+  document.querySelectorAll('.openBtn').forEach(b=>{
+    b.onclick = (e)=> openModal(parseInt(e.target.dataset.idx));
+  });
+  document.querySelectorAll('.toggleOven').forEach(b=>{
+    b.onclick = (e)=>{
+      const i = parseInt(e.target.dataset.idx);
+      ovens[i].running = !ovens[i].running;
+      saveData();
+      renderOvens();
+      renderModalIfOpen();
+    };
+  });
+  document.querySelectorAll('.addDemo').forEach(b=>{
+    b.onclick = (e)=>{
+      const i = parseInt(e.target.dataset.idx);
+      if(ovens[i].components.length >= MAX_COMPS) return alert('已達最大元件數');
+      // add demo component with random accumulated hours
+      const rnd = Math.floor(Math.random()*200);
+      addComponentToOven(i, `C${String(ovens[i].components.length+1).padStart(3,'0')}`, rnd, false, null);
+      renderOvens();
+    };
+  });
+}
+
+function openModal(ovenIdx){
+  modalState.open = true;
+  modalState.ovenIndex = ovenIdx;
+  document.getElementById('modal').style.display = 'flex';
+  document.getElementById('modalTitle').innerText = `Oven #${ovens[ovenIdx].id}`;
+  document.getElementById('ovenToggleRun').innerText = ovens[ovenIdx].running ? 'Stop Oven' : 'Start Oven';
+  renderModalBody();
+}
+
+function closeModal(){
+  modalState.open = false;
+  modalState.ovenIndex = null;
+  document.getElementById('modal').style.display = 'none';
+}
+
+function renderModalBody(){
+  if(!modalState.open) return;
+  const oven = ovens[modalState.ovenIndex];
+  document.getElementById('ovenToggleRun').onclick = ()=>{
+    oven.running = !oven.running;
+    saveData();
+    document.getElementById('ovenToggleRun').innerText = oven.running ? 'Stop Oven' : 'Start Oven';
+    renderOvens();
+    renderModalBody();
+  };
+
+  const tbody = document.getElementById('compTableBody');
+  tbody.innerHTML = '';
+  oven.components.forEach((c, idx)=>{
+    const nextCp = getNextCheckpoint(c);
+    const due = nextCp !== null && c.accHours >= nextCp - 1e-9; // 到期
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td>${c.id}${c.isMttf?'<div class="small">mTTF</div>':''}</td>
+      <td>${c.accHours.toFixed(3)}</td>
+      <td>${nextCp===null?'-':nextCp + (c.isMttf? ' (mTTF)':'')}</td>
+      <td>${c.inMeasurement?'<span style="color:blue">Measuring</span>':(due?'<span class="due">DUE</span>':'Running')}</td>
+      <td>
+        <button data-idx="${idx}" class="startMeasureBtn">${c.inMeasurement?'End Measure':'Start Measure'}</button>
+        <button data-idx="${idx}" class="editBtn">Edit</button>
+        <button data-idx="${idx}" class="removeBtn">Remove</button>
+      </td>
+    `;
+    tbody.appendChild(row);
+  });
+
+  // events
+  document.querySelectorAll('.startMeasureBtn').forEach(b=>{
+    b.onclick = (e)=>{
+      const i = parseInt(e.target.dataset.idx);
+      toggleMeasurement(modalState.ovenIndex, i);
+      renderModalBody();
+      renderOvens();
+    };
+  });
+  document.querySelectorAll('.editBtn').forEach(b=>{
+    b.onclick = (e)=>{
+      const i = parseInt(e.target.dataset.idx);
+      const c = ovens[modalState.ovenIndex].components[i];
+      const newH = parseFloat(prompt('輸入新的累積時間 (hours)', c.accHours)) || c.accHours;
+      c.accHours = newH;
+      saveData();
+      renderModalBody();
+      renderOvens();
+    };
+  });
+  document.querySelectorAll('.removeBtn').forEach(b=>{
+    b.onclick = (e)=>{
+      const i = parseInt(e.target.dataset.idx);
+      if(!confirm('確定要移除此元件？')) return;
+      ovens[modalState.ovenIndex].components.splice(i,1);
+      saveData();
+      renderModalBody();
+      renderOvens();
+    };
+  });
+}
+
+function renderModalIfOpen(){ if(modalState.open) renderModalBody(); }
+
+function addComponentToOven(ovenIdx, compId, initialHours=0, isMttf=false, mttfHours=null){
+  const oven = ovens[ovenIdx];
+  if(oven.components.length >= MAX_COMPS) return alert('已達上限');
+  const comp = {
+    id: compId,
+    accHours: Number(initialHours) || 0,
+    inMeasurement: false,
+    isMttf: !!isMttf,
+    mttfHours: mttfHours ? Number(mttfHours) : null,
+    checkpoints: isMttf && mttfHours ? [Number(mttfHours)] : DEFAULT_CHECKPOINTS.slice()
+  };
+  // compute nextIdx if needed (not strictly necessary)
+  oven.components.push(comp);
+  saveData();
+}
+
+function toggleMeasurement(ovenIdx, compIdx){
+  const comp = ovens[ovenIdx].components[compIdx];
+  // If starting measurement -> set inMeasurement true (stop accumulating)
+  if(!comp.inMeasurement){
+    comp.inMeasurement = true;
+    // optionally record measurement start timestamp (not used now)
+  } else {
+    // ending measurement -> resume, compute next checkpoint
+    comp.inMeasurement = false;
+    // after measurement end, we decide next checkpoint automatically: find checkpoint > accHours
+    const next = getNextCheckpoint(comp);
+    // if none, it's finished
+    if(next===null){
+      // all checkpoints done
+      // do nothing special; user can remove later
+    } else {
+      // next checkpoint computed dynamically (we show it in UI)
+    }
+  }
+  saveData();
+}
+
+function getNextCheckpoint(comp){
+  // returns first checkpoint > accHours, else null
+  const cps = comp.isMttf && comp.mttfHours ? [comp.mttfHours] : (comp.checkpoints || DEFAULT_CHECKPOINTS);
+  for(let i=0;i<cps.length;i++){
+    if(cps[i] > comp.accHours + 1e-9) return cps[i];
+  }
+  return null;
+}
+
+// tick increment function
+let lastTick = Date.now();
+function tick(){
+  const now = Date.now();
+  const deltaMs = now - lastTick;
+  lastTick = now;
+  if(globalPaused) return; // 全域暫停 -> 不累計
+  // Iterate ovens & components
+  ovens.forEach(oven=>{
+    if(!oven.running) return; // oven 停止
+    oven.components.forEach(comp=>{
+      if(comp.inMeasurement) return; // measurement 中暫停計時
+      // accumulate hours
+      comp.accHours += deltaMs * MS_TO_HOURS; // ms -> hours
+    });
+  });
+  saveData(); // save periodically each tick
+  renderModalIfOpen();
+  // update tick info
+  document.getElementById('tickInfo').innerText = `Tick: ${Math.round(TICK_MS/1000)}s`;
+}
+
+// UI hooks
+document.getElementById('closeModal').onclick = closeModal;
+document.getElementById('addCompBtn').onclick = ()=>{
+  const ovenIdx = modalState.ovenIndex;
+  if(ovenIdx===null) return;
+  const id = document.getElementById('newCompId').value || `C${String(ovens[ovenIdx].components.length+1).padStart(3,'0')}`;
+  const hrs = parseFloat(document.getElementById('newCompHours').value) || 0;
+  const isMttf = document.getElementById('newIsMttf').checked;
+  const mttfVal = document.getElementById('mttfSelect').value;
+  addComponentToOven(ovenIdx, id, hrs, isMttf, isMttf?Number(mttfVal):null);
+  renderModalBody();
+  renderOvens();
+};
+document.getElementById('newIsMttf').onchange = (e)=>{
+  document.getElementById('mttfSelectLabel').style.display = e.target.checked? 'inline-block' : 'none';
+};
+
+document.getElementById('toggleAllBtn').onclick = (e)=>{
+  globalPaused = !globalPaused;
+  document.getElementById('toggleAllBtn').innerText = globalPaused ? 'Resume All' : 'Pause All';
+  // when globalPaused toggled, keep oven.running state unchanged; globalPaused takes precedence
+  saveData();
+};
+
+document.getElementById('saveBtn').onclick = ()=>{ saveData(); alert('Saved'); };
+
+// initialize and start tick
+initData();
+renderOvens();
+lastTick = Date.now();
+setInterval(tick, TICK_MS);
+
+// expose for debugging
+window._ovens = ovens;
+window.addComponentToOven = addComponentToOven;
+</script>
+</body>
+</html>
