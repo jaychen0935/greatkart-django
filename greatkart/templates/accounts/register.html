@@ -1,19 +1,18 @@
 {% extends 'base.html' %} {% load static %} {% block content %}
 <!-- ========================= SECTION CONTENT ========================= -->
 <section class="section-content padding-y">
-
-
-{% if messages %}
+  {% comment %} {% if messages %}
   <ul>
     {% for message in messages %}
-      <li class="{{ message.tags }}">{{ message }}</li>
+    <li class="{{ message.tags }}">{{ message }}</li>
     {% endfor %}
   </ul>
-{% endif %}
+  {% endif %} {% endcomment %}
 
-    <!-- ============================ COMPONENT REGISTER   ================================= -->
+  <!-- ============================ COMPONENT REGISTER   ================================= -->
   <div class="card mx-auto" style="max-width: 520px; margin-top: 40px">
     <article class="card-body">
+      {% include 'includes/alerts.html' %}
       <header class="mb-4"><h4 class="card-title">Sign up</h4></header>
       <form action="{% url 'register' %}" method="POST">
         {% csrf_token %}
@@ -65,6 +64,8 @@
             Register
           </button>
         </div>
+        {% comment %} {{form.email.errors}} {% endcomment %} {{
+        form.non_field_errors }}
         <!-- form-group// -->
       </form>
     </article>

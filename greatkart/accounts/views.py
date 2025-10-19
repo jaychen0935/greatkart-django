@@ -1,4 +1,4 @@
-from django.shortcuts import render
+from django.shortcuts import render,redirect
 from .forms import RegistrationForm
 from .models import account
 from django.contrib import messages
@@ -23,14 +23,15 @@ def register(request):
             user.phone_number=phone_number
             user.save()
             # form.save()
-            print('user created successfully')
+            messages.success(request,'Registration successful.')
+            return redirect('register')
         else:
             # Invalid form -> show errors
             for field, errors in form.errors.items():
                 for error in errors:
                     messages.error(request, f"{field}: {error}")      
     else:
-        form = RegistrationForm(request.POST)
+        form = RegistrationForm()
     context={'form':form}
     return render(request,'accounts/register.html',context)
 
