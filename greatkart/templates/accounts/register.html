@@ -64,15 +64,18 @@
             Register
           </button>
         </div>
-        {% comment %} {{form.email.errors}} {% endcomment %} {{
-        form.non_field_errors }}
+        {% comment %} {{form.email.errors}} {% endcomment %} 
+       <br>
+        {{ form.non_field_errors }}
         <!-- form-group// -->
       </form>
     </article>
     <!-- card-body.// -->
   </div>
   <!-- card .// -->
-  <p class="text-center mt-4">Have an account? <a href="">Log In</a></p>
+  <p class="text-center mt-4">
+    Have an account? <a href="{% url 'login' %}">Log In</a>
+  </p>
   <br /><br />
   <!-- ============================ COMPONENT REGISTER  END.// ================================= -->
 </section>
